@@ -35,9 +35,11 @@ services:
       POSTGRES_USER: health
       POSTGRES_PASSWORD: health
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    command: ["bash", "-lc", "uvicorn main:app --host 0.0.0.0 --port 8000"]
+    command: ["bash", "-lc", "uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app"]
     ports:
       - "8000:8000"
+    volumes:
+      - ./:/app:delegated
     networks:
       - backend
 
