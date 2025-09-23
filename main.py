@@ -330,7 +330,7 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
         return AskResponse(
             answer=result.get("guidance", "Please provide DRG, ZIP, and optional distance."),
             results=[],
-            follow_up=None,
+            follow_up=result.get("follow_up") or None,
             sql=result.get("sql") if (body.include_sql or False) else None,
         )
 

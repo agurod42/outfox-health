@@ -269,7 +269,7 @@ def test_ask_parses_and_answers():
     main_module.generate_nl2sql = _fake_nl2sql  # type: ignore
     app.dependency_overrides[get_session] = override_session_with(fake_rows)
     client = TestClient(app)
-    res = client.post("/ask", json={"question": "Who is cheapest for DRG 470 within 25 miles of 10001?", "include_sql": true})
+    res = client.post("/ask", json={"question": "Who is cheapest for DRG 470 within 25 miles of 10001?", "include_sql": True})
     assert res.status_code == 200
     payload = res.json()
     assert "Results for:" in payload["answer"]
