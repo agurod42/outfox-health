@@ -233,18 +233,23 @@ def test_radius_with_existing_src_centroid_no_inserts():
 
 
 def test_ask_parses_and_answers():
-    # Monkeypatch LLM to a fixed SQL
+    # Monkeypatch LLM to a fixed SQL (new unified path)
     import main as main_module
 
-    def _fake_sql(_q: str) -> str:
-        return (
-            "SELECT p.provider_id, p.provider_name, p.city, p.state, p.zip, "
-            "dp.ms_drg_code, dp.ms_drg_description, dp.total_discharges, "
-            "dp.avg_covered_charges, dp.avg_total_payments, dp.avg_medicare_payments, r.rating "
-            "FROM drg_prices dp JOIN providers p ON p.provider_id = dp.provider_id "
-            "LEFT JOIN ratings r ON r.provider_id = p.provider_id "
-            "WHERE dp.ms_drg_code = '470' LIMIT 100"
-        )
+    def _fake_nl2sql(_q: str, _hints: str):
+        return {
+            "outcome": "sql",
+            "sql": (
+                "SELECT p.provider_id, p.provider_name, p.city, p.state, p.zip, "
+                "dp.ms_drg_code, dp.ms_drg_description, dp.total_discharges, "
+                "dp.avg_covered_charges, dp.avg_total_payments, dp.avg_medicare_payments, r.rating "
+                "FROM drg_prices dp JOIN providers p ON p.provider_id = dp.provider_id "
+                "LEFT JOIN ratings r ON r.provider_id = p.provider_id "
+                "WHERE dp.ms_drg_code = '470' LIMIT 100"
+            ),
+            "guidance": "",
+            "follow_up": "Consider adding a ZIP to narrow further.",
+        }
 
     fake_rows = [{
         "provider_id": "010001",
@@ -261,55 +266,71 @@ def test_ask_parses_and_answers():
         "rating": 7,
     }]
 
-    main_module.generate_sql_from_question = _fake_sql  # type: ignore
+    main_module.generate_nl2sql = _fake_nl2sql  # type: ignore
     app.dependency_overrides[get_session] = override_session_with(fake_rows)
     client = TestClient(app)
-    res = client.post("/ask", json={"question": "Who is cheapest for DRG 470 within 25 miles of 10001?"})
+    res = client.post("/ask", json={"question": "Who is cheapest for DRG 470 within 25 miles of 10001?", "include_sql": true})
     assert res.status_code == 200
     payload = res.json()
     assert "Results for:" in payload["answer"]
     assert len(payload["results"]) == 1
+    assert "sql" in payload and payload["sql"].startswith("SELECT ")
 
 
 def test_ask_unparseable_message_and_no_results():
     # LLM returns unsafe SQL
     import main as main_module
 
-    def _unsafe_sql(_q: str) -> str:
-        return "DROP TABLE providers"  # clearly unsafe
+    def _unsafe(_q: str, _hints: str):
+        return {"outcome": "sql", "sql": "DROP TABLE providers", "guidance": "", "follow_up": ""}
 
-    main_module.generate_sql_from_question = _unsafe_sql  # type: ignore
+    main_module.generate_nl2sql = _unsafe  # type: ignore
     app.dependency_overrides[get_session] = override_session_with([])
     client = TestClient(app)
     res = client.post("/ask", json={"question": "hello?"})
-    assert res.status_code == 400
-    assert "Unsafe SQL" in res.json()["detail"]
+    assert res.status_code == 200
+    assert "Unsafe SQL" in res.json()["answer"]
 
 
 def test_ask_llm_failure_returns_400():
     import main as main_module
 
-    def _boom(_q: str) -> str:
+    def _boom(_q: str, _hints: str):
         raise RuntimeError("model timeout")
 
-    main_module.generate_sql_from_question = _boom  # type: ignore
+    main_module.generate_nl2sql = _boom  # type: ignore
     client = TestClient(app)
     res = client.post("/ask", json={"question": "any"})
-    assert res.status_code == 400
-    assert "NL2SQL_failed" in res.json()["detail"]
+    assert res.status_code == 200
+    assert "NL2SQL failed:" in res.json()["answer"]
 
 
 def test_ask_disallowed_table_returns_400():
     import main as main_module
 
-    def _bad_table(_q: str) -> str:
-        return "SELECT * FROM users LIMIT 10"  # users table is not allow-listed
+    def _bad_table(_q: str, _hints: str):
+        return {"outcome": "sql", "sql": "SELECT * FROM users LIMIT 10", "guidance": "", "follow_up": ""}
 
-    main_module.generate_sql_from_question = _bad_table  # type: ignore
+    main_module.generate_nl2sql = _bad_table  # type: ignore
     client = TestClient(app)
     res = client.post("/ask", json={"question": "any"})
-    assert res.status_code == 400
-    assert "Unsafe SQL" in res.json()["detail"]
+    assert res.status_code == 200
+    assert "Unsafe SQL" in res.json()["answer"]
+
+
+def test_ask_guidance_path():
+    import main as main_module
+
+    def _guidance(_q: str, _hints: str):
+        return {"outcome": "guidance", "sql": "", "guidance": "Please add a ZIP.", "follow_up": "ZIP?"}
+
+    main_module.generate_nl2sql = _guidance  # type: ignore
+    client = TestClient(app)
+    res = client.post("/ask", json={"question": "vague"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["answer"].startswith("Please add a ZIP")
+    assert body.get("follow_up") == "ZIP?"
 
 
 def test_healthz_failure_returns_503():
