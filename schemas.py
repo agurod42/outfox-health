@@ -9,8 +9,8 @@ class ProviderOut(BaseModel):
     city: Optional[str] = None
     state: Optional[str] = None
     zip: str
-    ms_drg_code: str
-    ms_drg_description: str
+    ms_drg_code: Optional[str] = None
+    ms_drg_description: Optional[str] = None
     total_discharges: Optional[int] = None
     avg_covered_charges: Optional[float] = Field(default=None, description="USD")
     avg_total_payments: Optional[float] = Field(default=None, description="USD")
@@ -19,11 +19,12 @@ class ProviderOut(BaseModel):
 
 
 class AskRequest(BaseModel):
-    question: str
+    question: Optional[str] = None
 
 
 class AskResponse(BaseModel):
     answer: str
     results: list[ProviderOut] = []
+    follow_up: Optional[str] = None
 
 

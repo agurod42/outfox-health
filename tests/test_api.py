@@ -233,46 +233,83 @@ def test_radius_with_existing_src_centroid_no_inserts():
 
 
 def test_ask_parses_and_answers():
-    fake_rows = [
-        {
-            "provider_id": "010001",
-            "provider_name": "Southeast Health Medical Center",
-            "city": "Dothan",
-            "state": "AL",
-            "zip": "10001",
-            "ms_drg_code": "470",
-            "ms_drg_description": "MAJOR JOINT REPLACEMENT OR REATTACHMENT ...",
-            "total_discharges": 10,
-            "avg_covered_charges": 120000.00,
-            "avg_total_payments": 20000.00,
-            "avg_medicare_payments": 18000.00,
-            "rating": 7,
-        }
-    ]
+    # Monkeypatch LLM to a fixed SQL
+    import main as main_module
+
+    def _fake_sql(_q: str) -> str:
+        return (
+            "SELECT p.provider_id, p.provider_name, p.city, p.state, p.zip, "
+            "dp.ms_drg_code, dp.ms_drg_description, dp.total_discharges, "
+            "dp.avg_covered_charges, dp.avg_total_payments, dp.avg_medicare_payments, r.rating "
+            "FROM drg_prices dp JOIN providers p ON p.provider_id = dp.provider_id "
+            "LEFT JOIN ratings r ON r.provider_id = p.provider_id "
+            "WHERE dp.ms_drg_code = '470' LIMIT 100"
+        )
+
+    fake_rows = [{
+        "provider_id": "010001",
+        "provider_name": "Southeast Health Medical Center",
+        "city": "Dothan",
+        "state": "AL",
+        "zip": "10001",
+        "ms_drg_code": "470",
+        "ms_drg_description": "MAJOR JOINT REPLACEMENT OR REATTACHMENT ...",
+        "total_discharges": 10,
+        "avg_covered_charges": 120000.00,
+        "avg_total_payments": 20000.00,
+        "avg_medicare_payments": 18000.00,
+        "rating": 7,
+    }]
+
+    main_module.generate_sql_from_question = _fake_sql  # type: ignore
     app.dependency_overrides[get_session] = override_session_with(fake_rows)
     client = TestClient(app)
     res = client.post("/ask", json={"question": "Who is cheapest for DRG 470 within 25 miles of 10001?"})
     assert res.status_code == 200
     payload = res.json()
-    assert "Cheapest for DRG 470" in payload["answer"]
+    assert "Results for:" in payload["answer"]
     assert len(payload["results"]) == 1
 
 
 def test_ask_unparseable_message_and_no_results():
+    # LLM returns unsafe SQL
+    import main as main_module
+
+    def _unsafe_sql(_q: str) -> str:
+        return "DROP TABLE providers"  # clearly unsafe
+
+    main_module.generate_sql_from_question = _unsafe_sql  # type: ignore
     app.dependency_overrides[get_session] = override_session_with([])
     client = TestClient(app)
-    # Unparseable
     res = client.post("/ask", json={"question": "hello?"})
-    assert res.status_code == 200
-    payload = res.json()
-    assert "couldn't extract" in payload["answer"].lower()
-    assert payload["results"] == []
+    assert res.status_code == 400
+    assert "Unsafe SQL" in res.json()["detail"]
 
-    # Parsed but no rows
-    res = client.post("/ask", json={"question": "Who is cheapest for DRG 470 within 25 miles of 10001?"})
-    payload = res.json()
-    assert payload["answer"].lower().startswith("no providers")
-    assert payload["results"] == []
+
+def test_ask_llm_failure_returns_400():
+    import main as main_module
+
+    def _boom(_q: str) -> str:
+        raise RuntimeError("model timeout")
+
+    main_module.generate_sql_from_question = _boom  # type: ignore
+    client = TestClient(app)
+    res = client.post("/ask", json={"question": "any"})
+    assert res.status_code == 400
+    assert "NL2SQL_failed" in res.json()["detail"]
+
+
+def test_ask_disallowed_table_returns_400():
+    import main as main_module
+
+    def _bad_table(_q: str) -> str:
+        return "SELECT * FROM users LIMIT 10"  # users table is not allow-listed
+
+    main_module.generate_sql_from_question = _bad_table  # type: ignore
+    client = TestClient(app)
+    res = client.post("/ask", json={"question": "any"})
+    assert res.status_code == 400
+    assert "Unsafe SQL" in res.json()["detail"]
 
 
 def test_healthz_failure_returns_503():
