@@ -14,9 +14,11 @@ if str(ROOT) not in sys.path:
 from main import app
 from db import get_session
 
+# Note: ZIP centroid seeding is covered indirectly via ETL; here we assert SQL shape for radius
+
 
 class _FakeResult:
-    def __init__(self, rows: list[dict[str, Any]]):
+    def __init__(self, rows: list[Any]):
         self._rows = rows
 
     def mappings(self):
@@ -25,18 +27,35 @@ class _FakeResult:
     def all(self):
         return self._rows
 
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def scalars(self):
+        class _Scalars:
+            def __init__(self, rows: list[Any]):
+                self._rows = rows
+
+            def all(self):
+                return self._rows
+
+        return _Scalars([r[0] if isinstance(r, (list, tuple)) else r for r in self._rows])
+
 
 class _FakeSession:
-    def __init__(self, rows: list[dict[str, Any]] | None = None, *, raise_on_execute: bool = False):
+    def __init__(self, rows: list[dict[str, Any]] | None = None, *, raise_on_execute: bool = False, existing_centroids: set[str] | None = None):
         self._rows = rows or []
         self.raise_on_execute = raise_on_execute
         self.last_sql: str | None = None
         self.last_params: dict[str, Any] | None = None
+        self.executed_sql: list[str] = []
+        self.existing_centroids = existing_centroids or set()
 
     async def execute(self, *args, **kwargs):  # pragma: no cover - simple stub
         if self.raise_on_execute:
             raise RuntimeError("boom")
-        self.last_sql = str(args[0]) if args else None
+        sql = str(args[0]) if args else ""
+        self.last_sql = sql
+        self.executed_sql.append(sql)
         # SQLAlchemy accepts params as positional dict or kwargs
         if kwargs:
             self.last_params = kwargs
@@ -44,6 +63,15 @@ class _FakeSession:
             self.last_params = args[1]
         else:
             self.last_params = {}
+
+        # Emulate centroid existence check
+        if "FROM zip_centroids" in sql and "SELECT 1" in sql:
+            z = self.last_params.get("z")
+            return _FakeResult([("1",)] if z in self.existing_centroids else [])
+        # Emulate distinct zip preload query
+        if "SELECT DISTINCT p.zip" in sql:
+            return _FakeResult([])
+        # Default: return provider rows
         return _FakeResult(self._rows)
 
     async def commit(self):
@@ -139,19 +167,69 @@ def test_providers_by_drg_only_and_zip_only_and_sql_shape():
 
     # SQL capture and parameterization check using a new session
     special = "023' OR 1=1 --"
-    sess = _FakeSession([])
-    app.dependency_overrides[get_session] = (lambda: (yield sess))  # type: ignore
+    async def _yield_sess() -> AsyncGenerator[_FakeSession, None]:
+        sess = _FakeSession([])
+        try:
+            yield sess
+        finally:
+            await sess.close()
+    app.dependency_overrides[get_session] = _yield_sess
     res = client.get("/providers", params={"drg": special, "zip": "10001"})
     assert res.status_code == 200
-    assert sess.last_sql is not None
-    assert "ORDER BY dp.avg_covered_charges ASC NULLS LAST" in sess.last_sql
-    assert "LIMIT 100" in sess.last_sql
+    # Fetch the last yielded session from override by triggering again and capturing
+    sess2 = _FakeSession([])
+    app.dependency_overrides[get_session] = (lambda: (yield sess2))  # type: ignore
+    _ = client.get("/providers", params={"drg": special, "zip": "10001"})
+    assert sess2.last_sql is not None
+    assert "ORDER BY dp.avg_covered_charges ASC NULLS LAST" in sess2.last_sql
+    assert "LIMIT 100" in sess2.last_sql
     # Placeholders should be present; raw special string should not be embedded in SQL
-    assert ":drg" in sess.last_sql and ":drg_like" in sess.last_sql
-    assert special not in sess.last_sql
+    assert ":drg" in sess2.last_sql and ":drg_like" in sess2.last_sql
+    assert special not in sess2.last_sql
+    assert sess2.last_params is not None
+    assert sess2.last_params.get("drg") == special
+    assert sess2.last_params.get("drg_like") == f"%{special}%"
+
+
+def test_providers_radius_filter_joins_and_params():
+    # Provide a fake session to capture SQL with radius; mark src zip as present so geocode is skipped
+    sess = _FakeSession([], existing_centroids={"10001"})
+    app.dependency_overrides[get_session] = (lambda: (yield sess))  # type: ignore
+    client = TestClient(app)
+    res = client.get("/providers", params={"drg": "023", "zip": "10001", "radius_km": 25})
+    assert res.status_code == 200
+    assert sess.last_sql is not None
+    # Ensure the join on zip_centroids and haversine filter are present
+    assert "JOIN zip_centroids zc_src" in sess.last_sql
+    assert "JOIN zip_centroids zc_dest" in sess.last_sql
+    assert "haversine_km(" in sess.last_sql
+    assert "<= :radius_km" in sess.last_sql
     assert sess.last_params is not None
-    assert sess.last_params.get("drg") == special
-    assert sess.last_params.get("drg_like") == f"%{special}%"
+    assert sess.last_params.get("src_zip") == "10001"
+    assert sess.last_params.get("radius_km") == 25
+
+
+def test_radius_missing_src_centroid_returns_503(caplog):
+    # With no centroid present for source ZIP, the API should 503 and log a warning
+    from main import app as _app
+    sess = _FakeSession([], existing_centroids=set())
+    _app.dependency_overrides[get_session] = (lambda: (yield sess))  # type: ignore
+    client = TestClient(_app)
+    with caplog.at_level("WARNING"):
+        res = client.get("/providers", params={"drg": "023", "zip": "99999", "radius_km": 10})
+    assert res.status_code == 503
+    assert any("missing_centroid" in rec.message or "missing_centroid" in rec.getMessage() for rec in caplog.records)
+
+
+def test_radius_with_existing_src_centroid_no_inserts():
+    from main import app as _app
+    # Mark src centroid present; API should not attempt to insert centroids and should succeed
+    sess = _FakeSession([], existing_centroids={"10001"})
+    _app.dependency_overrides[get_session] = (lambda: (yield sess))  # type: ignore
+    client = TestClient(_app)
+    res = client.get("/providers", params={"drg": "023", "zip": "10001", "radius_km": 10})
+    assert res.status_code == 200
+    assert not any("INSERT INTO zip_centroids" in s for s in sess.executed_sql)
 
 
 def test_ask_parses_and_answers():

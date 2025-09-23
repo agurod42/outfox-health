@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -12,6 +13,22 @@ from schemas import AskRequest, AskResponse, ProviderOut
 
 
 app = FastAPI(title="Healthcare Cost Navigator", description="Simple API to search providers by DRG and ask NL questions. Swagger available at /docs.")
+
+logger = logging.getLogger("app")
+logger.setLevel(logging.INFO)
+
+
+@app.on_event("startup")
+async def _configure_logging():
+    # Ensure our custom loggers emit to stdout in Uvicorn
+    for name in ("app", "geo"):
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.INFO)
+        if not lg.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+            lg.addHandler(handler)
+        lg.propagate = True
 
 
 def _parse_simple_question(question: str) -> dict[str, Any]:
@@ -45,11 +62,35 @@ async def _query_providers(
         params["drg"] = drg
         params["drg_like"] = f"%{drg}%"
 
-    if zip_code:
+    if zip_code and not (radius_km and radius_km > 0):
+        # Only constrain by exact ZIP when a radius is NOT provided
         conditions.append("p.zip = :zip")
         params["zip"] = zip_code
 
     where_sql = " AND ".join(conditions) if conditions else "TRUE"
+
+    distance_join = ""
+    distance_select = ""
+    distance_condition = ""
+    if zip_code and radius_km and radius_km > 0:
+        # Require that a centroid exists for the source ZIP
+        src_exists = (
+            await session.execute(text("SELECT 1 FROM zip_centroids WHERE zip = :z"), {"z": zip_code})
+        ).first()
+        if not src_exists:
+            logger.warning("missing_centroid src_zip=%s", zip_code)
+            raise HTTPException(status_code=503, detail="zip centroid not available")
+
+        # Join only against existing destination centroids
+        # Join centroids and filter by Haversine distance
+        distance_join = (
+            "JOIN zip_centroids zc_src ON zc_src.zip = :src_zip "
+            "JOIN zip_centroids zc_dest ON zc_dest.zip = p.zip "
+        )
+        distance_select = ", haversine_km(zc_src.lat, zc_src.lng, zc_dest.lat, zc_dest.lng) AS distance_km"
+        distance_condition = " AND haversine_km(zc_src.lat, zc_src.lng, zc_dest.lat, zc_dest.lng) <= :radius_km"
+        params["src_zip"] = zip_code
+        params["radius_km"] = radius_km
 
     sql = f"""
         SELECT
@@ -64,11 +105,12 @@ async def _query_providers(
             dp.avg_covered_charges,
             dp.avg_total_payments,
             dp.avg_medicare_payments,
-            r.rating
+            r.rating{distance_select}
         FROM drg_prices dp
         JOIN providers p ON p.provider_id = dp.provider_id
+        {distance_join}
         LEFT JOIN ratings r ON r.provider_id = p.provider_id
-        WHERE {where_sql}
+        WHERE {where_sql}{distance_condition}
         ORDER BY dp.avg_covered_charges ASC NULLS LAST
         LIMIT 100
     """

@@ -100,11 +100,12 @@ CSV_PATH=data.csv python etl.py
 ```
 
 What the ETL does:
-- Parses the CSV headers listed above
 - Casts price fields to `NUMERIC(12,2)`
-- Normalizes `DRG_Cd` as **text** (keeps leading zeros)
-- Upserts rows into `providers`
 - Inserts/updates a mock `ratings` row per `provider_id`
+- Normalizes `DRG_Cd` as **text** (keeps leading zeros)
+- Parses the CSV headers listed above
+- Seeds `zip_centroids` for all ZIPs in `data.csv` (best-effort)
+- Upserts rows into `providers`
 
 ### 4) Run tests
 

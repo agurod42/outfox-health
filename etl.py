@@ -6,6 +6,7 @@ import sys
 from decimal import Decimal, InvalidOperation
 
 import psycopg
+from geo import geocode_zip_nominatim
 
 
 def normalize_zip(zip_code: str) -> str:
@@ -91,12 +92,30 @@ def main() -> int:
 
             print("Upserting providers, prices, and ratings…")
             with conn.cursor() as cur:
+                # Cache ZIPs we've already checked/inserted to avoid redundant lookups
+                centroids_checked: set[str] = set()
                 for row in reader:
                     provider_id = (row[k_ccn] or "").strip()
                     provider_name = (row.get(k_name) or "").strip()
                     city = (row.get(k_city) or "").strip() or None
                     state = (row.get(k_state) or "").strip() or None
                     zip5 = normalize_zip(row.get(k_zip) or "")
+                    # Ensure centroid exists for this ZIP (best-effort, once per ZIP)
+                    if zip5 and zip5 not in centroids_checked:
+                        centroids_checked.add(zip5)
+                        cur.execute("SELECT 1 FROM zip_centroids WHERE zip = %s", (zip5,))
+                        if not cur.fetchone():
+                            coords = geocode_zip_nominatim(zip5)
+                            if coords is None:
+                                raise SystemExit(
+                                    f"ERROR: Missing centroid for ZIP {zip5}; aborting ETL. "
+                                    "Please ensure geocoding is available or pre-seed zip_centroids."
+                                )
+                            lat, lng = coords
+                            cur.execute(
+                                "INSERT INTO zip_centroids (zip, lat, lng) VALUES (%s, %s, %s) ON CONFLICT (zip) DO NOTHING",
+                                (zip5, lat, lng),
+                            )
 
                     ms_drg_description = (row[k_drg_desc] or "").strip()
                     if k_drg_code and row.get(k_drg_code):
