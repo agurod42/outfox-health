@@ -30,6 +30,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      APP_LOG_LEVEL: DEBUG
       POSTGRES_HOST: postgres
       POSTGRES_DB: health
       POSTGRES_USER: health
