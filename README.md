@@ -1,5 +1,7 @@
 # Healthcare Cost Navigator
 
+![CI](https://github.com/agurod42/outfox-health/actions/workflows/ci.yml/badge.svg)
+
 A minimal web service to explore hospital costs and ratings for MS-DRG procedures. Built with **Python 3.11**, **FastAPI**, **async SQLAlchemy**, **PostgreSQL**, and the **OpenAI API** (for NL→SQL) for Outfox Health interview.
 
 ## Features
