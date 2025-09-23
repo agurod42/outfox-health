@@ -2,8 +2,6 @@
 
 A minimal web service to explore hospital costs and ratings for MS-DRG procedures. Built with **Python 3.11**, **FastAPI**, **async SQLAlchemy**, **PostgreSQL**, and the **OpenAI API** (for NL→SQL) for Outfox Health interview.
 
----
-
 ## Features
 
 - **AI assistant**
@@ -104,9 +102,22 @@ This:
 - Upserts rows into `providers`
 - Inserts/updates a mock `ratings` row per `provider_id`
 
+### 4) Run tests
+
+```bash
+pytest -q
+```
+Tests stub the database dependency; a running DB is not required.
+
 ---
 
 ## API
+
+### Swagger/OpenAPI
+
+- Swagger UI: `http://localhost:8000/docs`
+- OpenAPI JSON: `http://localhost:8000/openapi.json`
+- Root `/` redirects to the Swagger UI
 
 ### `GET /providers`
 
@@ -163,5 +174,3 @@ curl http://localhost:8000/healthz
 - Uses LLM to draft a SQL query template (safe-listed fields only)
 - Executes against DB
 - Returns grounded results or a helpful out-of-scope message
-
----
