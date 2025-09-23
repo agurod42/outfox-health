@@ -87,6 +87,8 @@ cp env.sample .env
 docker-compose up --build
 ```
 
+Swagger UI: `http://localhost:8000/docs`
+
 ### 3) Seed the DB
 
 Place your CSV (e.g., `data.csv`) at repo root, then:
@@ -150,6 +152,11 @@ curl "http://localhost:8000/providers?drg=023&zip=36301&radius_km=40"
 curl -X POST "http://localhost:8000/ask" \
   -H "Content-Type: application/json" \
   -d '{"question":"Who is cheapest for DRG 470 within 25 miles of 10001?"}'
+```
+
+Healthcheck:
+```bash
+curl http://localhost:8000/healthz
 ```
 
 **Behavior**
