@@ -14,8 +14,7 @@ venv/
 # Environment files
 .env
 .env.*
-!env.sample
-!.env.example
+!.env.sample
 
 # Testing / tooling caches
 .pytest_cache/
