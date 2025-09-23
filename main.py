@@ -327,13 +327,23 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
         return AskResponse(answer=f"NL2SQL failed: {exc}", results=[])
 
     if result.get("outcome") != "sql":
-        return AskResponse(answer=result.get("guidance", "Please provide DRG, ZIP, and optional distance."), results=[], follow_up=result.get("follow_up") or None)
+        return AskResponse(
+            answer=result.get("guidance", "Please provide DRG, ZIP, and optional distance."),
+            results=[],
+            follow_up=result.get("follow_up") or None,
+            sql=result.get("sql") if (body.include_sql or False) else None,
+        )
 
     sql = result.get("sql", "").strip()
     # 2) Validate SQL against allow-list
     ok, reason = _sql_is_safe(sql)
     if not ok:
-        return AskResponse(answer=f"Unsafe SQL: {reason}", results=[], follow_up=result.get("follow_up") or None)
+        return AskResponse(
+            answer=f"Unsafe SQL: {reason}",
+            results=[],
+            follow_up=result.get("follow_up") or None,
+            sql=sql if (body.include_sql or False) else None,
+        )
 
     # 3) Execute and return grounded result
     try:
@@ -345,6 +355,7 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
         answer=f"Results for: {body.question or ''}",
         results=[ProviderOut(**dict(r)) for r in rows if r],
         follow_up=result.get("follow_up") or None,
+        sql=sql if (body.include_sql or False) else None,
     )
 
 

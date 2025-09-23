@@ -20,11 +20,13 @@ class ProviderOut(BaseModel):
 
 class AskRequest(BaseModel):
     question: Optional[str] = None
+    include_sql: Optional[bool] = False
 
 
 class AskResponse(BaseModel):
     answer: str
     results: list[ProviderOut] = []
     follow_up: Optional[str] = None
+    sql: Optional[str] = None
 
 
