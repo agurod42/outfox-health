@@ -330,7 +330,7 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
         return AskResponse(
             answer=result.get("guidance", "Please provide DRG, ZIP, and optional distance."),
             results=[],
-            follow_up=result.get("follow_up") or None,
+            follow_up=None,
             sql=result.get("sql") if (body.include_sql or False) else None,
         )
 
@@ -341,7 +341,7 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
         return AskResponse(
             answer=f"Unsafe SQL: {reason}",
             results=[],
-            follow_up=result.get("follow_up") or None,
+            follow_up=None,
             sql=sql if (body.include_sql or False) else None,
         )
 
@@ -349,7 +349,7 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
     try:
         rows = (await session.execute(text(sql))).mappings().all()
     except Exception as exc:
-        return AskResponse(answer=f"SQL execution error: {exc}", results=[], follow_up=result.get("follow_up") or None)
+        return AskResponse(answer=f"SQL execution error: {exc}", results=[], follow_up=None)
 
     return AskResponse(
         answer=f"Results for: {body.question or ''}",
