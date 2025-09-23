@@ -61,6 +61,12 @@ A minimal web service to explore hospital costs and ratings for MS-DRG procedure
 - **Observability**: add basic metrics/tracing; pydantic-settings for config
 - **Safety**: strict NL→SQL allow-list; parameterized queries only
 
+Production note: In a real deployment, NL→SQL should be served by an internal
+service backed by an offline/open-source model (e.g., a fine-tuned Llama
+variant) to avoid sending sensitive data to third-party providers and to keep
+data private (also improves latency/cost control). The external API use here is
+for demo purposes only.
+
 ---
 
 ## Quickstart
