@@ -65,16 +65,20 @@ A minimal web service to explore hospital costs and ratings for MS-DRG procedure
 
 ## Quickstart
 
+### 0) Python virtual environment (macOS/Linux)
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
 ### 1) Environment
 
 ```bash
-cp .env.example .env
-# Set:
-# POSTGRES_HOST=postgres
-# POSTGRES_DB=health
-# POSTGRES_USER=health
-# POSTGRES_PASSWORD=health
-# OPENAI_API_KEY=sk-...
+cp env.sample .env
+# Edit .env with database vars and OPENAI_API_KEY (optional)
 ```
 
 ### 2) Docker
@@ -85,7 +89,7 @@ docker-compose up --build
 
 ### 3) Seed the DB
 
-Place your CSV (e.g., `sample_prices_ny.csv`) at repo root, then:
+Place your CSV (e.g., `data.csv`) at repo root, then:
 
 ```bash
 python etl.py
@@ -141,17 +145,16 @@ curl "http://localhost:8000/providers?drg=023&zip=36301&radius_km=40"
 { "question": "Who has the best ratings for DRG 023 near 36301?" }
 ```
 
+**Example**
+```bash
+curl -X POST "http://localhost:8000/ask" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Who is cheapest for DRG 470 within 25 miles of 10001?"}'
+```
+
 **Behavior**
 - Uses LLM to draft a SQL query template (safe-listed fields only)
 - Executes against DB
 - Returns grounded results or a helpful out-of-scope message
-
----
-
-## Local Development
-
-- **Run app**: `uvicorn main:app --reload`
-- **Format/Lint**: `ruff check . && ruff format .`
-- **Tests** (optional): `pytest -q`
 
 ---
