@@ -1,66 +1,138 @@
 import os
 import time
 import logging
-from typing import Optional, Tuple
-
-import httpx
+from typing import Optional, Tuple, Dict, List
+import asyncio
 
 
 logger = logging.getLogger("geo")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+_LOCAL_ZIP_DB: Dict[str, Tuple[float, float]] = {}
+_LOCAL_ZIP_DB_LOADED: bool = False
 
 
-def geocode_zip_nominatim(zip_code: str) -> Optional[Tuple[float, float]]:
-    """Geocode a US ZIP5 using OpenStreetMap Nominatim.
+def load_local_zip_db(file_path: str) -> Dict[str, Tuple[float, float]]:
+    """Load local ZIP centroids from a tab-separated file like data_zip.txt.
 
-    Returns (lat, lng) or None if not found. Respects basic etiquette by setting
-    a User-Agent that includes contact info when available.
+    Expected columns (TSV): country, zip, city, state_name, state_abbr, county, county_code, ..., lat, lon, accuracy
+    We parse zip at index 1, lat at -3, lon at -2.
     """
-    zip_str = str(zip_code).strip()[:5]
-    if not zip_str or not zip_str.isdigit() or len(zip_str) != 5:
-        return None
+    global _LOCAL_ZIP_DB_LOADED, _LOCAL_ZIP_DB
+    if _LOCAL_ZIP_DB_LOADED:
+        return _LOCAL_ZIP_DB
+    path = os.getenv("ZIP_LOCAL_FILE", file_path)
+    try:
+        if not os.path.exists(path):
+            logger.warning("Local ZIP data file not found: %s", path)
+            _LOCAL_ZIP_DB_LOADED = True
+            return _LOCAL_ZIP_DB
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                parts = s.split("\t")
+                if len(parts) < 6:
+                    continue
+                zip_code = (parts[1] or "").strip()[:5]
+                if not zip_code or not zip_code.isdigit():
+                    continue
+                try:
+                    lat = float(parts[-3])
+                    lon = float(parts[-2])
+                except Exception:
+                    continue
+                _LOCAL_ZIP_DB[zip_code] = (lat, lon)
+        logger.info("Loaded %d ZIP centroids from %s", len(_LOCAL_ZIP_DB), path)
+    except Exception as exc:
+        logger.warning("Failed to load local ZIP db from %s: %s", path, exc)
+    finally:
+        _LOCAL_ZIP_DB_LOADED = True
+    return _LOCAL_ZIP_DB
 
-    base_url = os.getenv(
-        "GEOCODER_BASE_URL",
-        "https://nominatim.openstreetmap.org/search",
-    )
-    email = os.getenv("GEOCODER_EMAIL", "")
-    user_agent = os.getenv(
-        "GEOCODER_USER_AGENT",
-        f"outfox-health-geo/1.0 ({email})" if email else "outfox-health-geo/1.0",
-    )
 
-    params = {
-        "postalcode": zip_str,
-        "country": "USA",
-        "format": "json",
-        "limit": 1,
-    }
-    headers = {"User-Agent": user_agent}
+def _chunk(lst: List[str], n: int) -> List[List[str]]:
+    """Yield successive n-sized chunks from list."""
+    return [lst[i:i+n] for i in range(0, len(lst), n)]
 
+
+async def geocode_zip_batch_zipcodebase(
+    zip_codes: List[str],
+    api_key: str,
+    cache_file: str,
+    country: str = "US",
+    max_codes_per_req: int = 100,  # keep URLs well under typical limits
+) -> Dict[str, Optional[Tuple[float, float]]]:
+    """
+    Geocode multiple US ZIP5 codes using Zipcodebase's /search GET API, checking local cache first.
+    - Endpoint: https://app.zipcodebase.com/api/v1/search
+    - Auth: apikey query parameter (NOT Authorization header)
+    - Params: codes=comma,separated,list, country=US (optional but recommended)
+    """
+    # Normalize input ZIPs (US 5-digit)
+    normalized = []
+    for z in zip_codes:
+        s = str(z).strip()
+        if not s:
+            continue
+        s = s[:5]
+        if s.isdigit():
+            normalized.append(s)
+    if not normalized:
+        return {}
+
+    # Initialize result with None for all
+    result_dict: Dict[str, Optional[Tuple[float, float]]] = {z: None for z in normalized}
+    missing_zips = normalized[:]
+
+    # Use local dataset instead of remote API
     start = time.perf_counter()
-    with httpx.Client(timeout=10.0, headers=headers) as client:
-        logger.info("geocode_request zip=%s base_url=%s", zip_str, base_url)
-        resp = client.get(base_url, params=params)
-        if resp.status_code != 200:
-            logger.warning("geocode_http_error zip=%s status=%s", zip_str, resp.status_code)
-            return None
-        data = resp.json()
-        if not data:
-            logger.warning("geocode_empty zip=%s", zip_str)
-            return None
-        try:
-            lat = float(data[0]["lat"])  # type: ignore[index]
-            lon = float(data[0]["lon"])  # type: ignore[index]
-            logger.info(
-                "geocode_success zip=%s lat=%s lon=%s dur_ms=%d",
-                zip_str,
-                f"{lat:.6f}",
-                f"{lon:.6f}",
-                int((time.perf_counter() - start) * 1000),
-            )
-            return (lat, lon)
-        except Exception as exc:
-            logger.warning("geocode_parse_error zip=%s error=%s", zip_str, exc)
-            return None
+    local_db = load_local_zip_db(os.getenv("ZIP_LOCAL_FILE", "data_zip.txt"))
+    for z in missing_zips:
+        coords = local_db.get(z)
+        if coords:
+            result_dict[z] = coords
+
+    # No cache persistence; rely on local dataset only
+
+    dur_ms = int((time.perf_counter() - start) * 1000)
+    logger.info("Geocoded %d/%d ZIPs in %d ms",
+                sum(1 for v in result_dict.values() if v), len(normalized), dur_ms)
+    return result_dict
 
 
+async def geocode_zip_async(
+    zip_code: str,
+    api_key: str,
+    cache_file: str,
+    country: str = "US",
+) -> Optional[Tuple[str, float, float]]:
+    """Geocode a single ZIP code using local dataset, checking cache first."""
+    zip_str = str(zip_code).strip()[:5]
+
+    result = await geocode_zip_batch_zipcodebase([zip_str], api_key, cache_file, country=country)
+    coords = result.get(zip_str)
+    return (zip_str, *coords) if coords else None
+
+
+def geocode_zip(zip_code: str, country: str = "US") -> Optional[Tuple[float, float]]:
+    """Synchronous wrapper for single ZIP geocoding."""
+    try:
+        res = asyncio.run(geocode_zip_async(zip_code, "", "", country=country))
+        return res[1:] if res else None
+    except RuntimeError:
+        # If already in an event loop (e.g., Jupyter), create a new task
+        return asyncio.get_event_loop().run_until_complete(
+            geocode_zip_async(zip_code, "", "", country=country)
+        )[1:]
+
+
+def geocode_zip_batch(zip_codes: List[str], country: str = "US") -> Dict[str, Optional[Tuple[float, float]]]:
+    """Synchronous wrapper for batch ZIP geocoding."""
+    try:
+        return asyncio.run(geocode_zip_batch_zipcodebase(zip_codes, "", "", country=country))
+    except RuntimeError:
+        return asyncio.get_event_loop().run_until_complete(
+            geocode_zip_batch_zipcodebase(zip_codes, "", "", country=country)
+        )
