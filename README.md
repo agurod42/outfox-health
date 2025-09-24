@@ -195,9 +195,10 @@ curl http://localhost:8000/healthz
 
 ### Example prompts to try
 
-- Cheapest hospital for DRG 470 within 25 miles of 10001
-- Best-rated hospitals for heart failure (DRG 291) near 60601
-- Lowest price for knee replacement near 94103
-- Which hospitals have the best ratings for hip replacement in 10001?
-- Show hospitals for DRG 023 in 36301 within 40 km
+- Best-rated hospitals near 35233
+- Best-rated hospitals for traumatic stupor near 35233
+- Cheapest hospital for DRG 470
+- Cheapest hospital for DRG 470 within 25 miles of 36801
+- Who has the best ratings for traumatic stupor near 36301?
+- What's the weather today?
 
