@@ -77,7 +77,7 @@
               'provider_id','provider_name','city','state','zip',
               'ms_drg_code','ms_drg_description','total_discharges',
               'avg_covered_charges','avg_total_payments','avg_medicare_payments',
-              'cost_usd','rating','distance_km'
+              'cost_usd','distance_km','rating'
             ];
             const allKeys = Array.from(new Set(rows.flatMap(r => Object.keys(r || {}))));
             const hasValue = k => rows.some(r => r && r[k] !== undefined && r[k] !== null && r[k] !== '');

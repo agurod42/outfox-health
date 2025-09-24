@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import logging
 from typing import Annotated, Any
 
@@ -361,9 +362,79 @@ async def ask(body: AskRequest, session: AsyncSession = Depends(get_session)):
     except Exception as exc:
         return AskResponse(answer=f"SQL execution error: {exc}", results=[], follow_up=None)
 
+    # 3b) If a ZIP appears in the user's question, compute distance_km to each provider ZIP (best-effort)
+    augmented: list[ProviderOut] = []
+    source_zip: str | None = None
+    if body.question:
+        m_zip = re.search(r"\b(\d{5})\b", body.question)
+        if m_zip:
+            source_zip = m_zip.group(1)
+
+    # Convert rows to dicts for augmentation
+    row_dicts: list[dict[str, Any]] = [dict(r) for r in rows if r]
+    if source_zip and row_dicts:
+        try:
+            src = (await session.execute(text("SELECT lat, lng FROM zip_centroids WHERE zip = :z"), {"z": source_zip})).mappings().first()
+        except Exception:
+            src = None
+        if src and "lat" in src and "lng" in src:
+            try:
+                src_lat = float(src["lat"])  # type: ignore[index]
+                src_lng = float(src["lng"])  # type: ignore[index]
+                dest_zips = sorted({str(rd.get("zip")) for rd in row_dicts if rd.get("zip")})
+                if dest_zips:
+                    params = {f"z{i}": z for i, z in enumerate(dest_zips)}
+                    in_clause = ", ".join(f":z{i}" for i in range(len(dest_zips)))
+                    try:
+                        dest_rows = (
+                            await session.execute(
+                                text(f"SELECT zip, lat, lng FROM zip_centroids WHERE zip IN ({in_clause})"),
+                                params,
+                            )
+                        ).mappings().all()
+                    except Exception:
+                        dest_rows = []
+                    dest_map: dict[str, tuple[float, float]] = {}
+                    for dr in dest_rows:
+                        z = str(dr.get("zip") or "")
+                        lat = dr.get("lat")
+                        lng = dr.get("lng")
+                        if z and lat is not None and lng is not None:
+                            try:
+                                dest_map[z] = (float(lat), float(lng))
+                            except Exception:
+                                pass
+
+                    def _hav_km(a_lat: float, a_lng: float, b_lat: float, b_lng: float) -> float:
+                        # Haversine distance in kilometers
+                        R = 6371.0088
+                        d_lat = math.radians(b_lat - a_lat)
+                        d_lon = math.radians(b_lng - a_lng)
+                        aa = math.sin(d_lat / 2) ** 2 + math.cos(math.radians(a_lat)) * math.cos(math.radians(b_lat)) * math.sin(d_lon / 2) ** 2
+                        c = 2 * math.atan2(math.sqrt(aa), math.sqrt(1 - aa))
+                        return R * c
+
+                    for rd in row_dicts:
+                        z = str(rd.get("zip") or "")
+                        if z in dest_map:
+                            try:
+                                rd["distance_km"] = _hav_km(src_lat, src_lng, dest_map[z][0], dest_map[z][1])
+                            except Exception:
+                                pass
+            except Exception:
+                # Any issues computing distances are non-fatal
+                pass
+
+    for rd in row_dicts:
+        try:
+            augmented.append(ProviderOut(**rd))
+        except Exception:
+            # Skip rows that don't match the expected shape
+            continue
+
     return AskResponse(
         answer=f"Results for: {body.question or ''}",
-        results=[ProviderOut(**dict(r)) for r in rows if r],
+        results=augmented,
         follow_up=result.get("follow_up") or None,
         sql=sql if (body.include_sql or False) else None,
     )
