@@ -18,6 +18,17 @@ def normalize_zip(zip_code: str) -> str:
     digits = "".join(ch for ch in zip_code if ch.isdigit())
     return digits.zfill(5)[:5]
 
+
+def normalize_ccn(val: str | None) -> str | None:
+    """Normalize a Hospital CCN/Provider ID/Facility ID to 6 digits."""
+    if not val:
+        return None
+    digits = "".join(ch for ch in str(val) if ch.isdigit())
+    if not digits:
+        return None
+    return digits.zfill(6)[:6]
+
+
 DRG_CODE_RE = re.compile(r"\s*(\d{3})\b")
 TWOPLACES = Decimal("0.01")
 
@@ -55,6 +66,61 @@ def execute_values(cur, sql_stmt: str, rows: list[tuple], page_size: int | None 
         _exec(rows)
 
 
+def load_star_ratings_local(logger) -> dict[str, int]:
+    """
+    Load Medicare Hospital Overall Star Ratings from local data_rating.csv.
+
+    Expected columns:
+      - "Facility ID"  (CCN, 6 digits)
+      - "Hospital overall rating" (1–5, may be blank or 'Not Available')
+    """
+    path = os.getenv("STAR_RATINGS_CSV", "data_rating.csv")
+    if not os.path.exists(path):
+        logger.warning("Local star ratings file not found at %s — no ratings will be loaded.", path)
+        return {}
+
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames:
+            logger.warning("Star ratings CSV appears to have no header: %s", path)
+            return {}
+
+        # Map columns using your provided structure; allow a couple variants just in case
+        def pick(colnames: list[str], *candidates: str) -> str | None:
+            lc = {c.lower(): c for c in colnames}
+            for cand in candidates:
+                if cand.lower() in lc:
+                    return lc[cand.lower()]
+            return None
+
+        k_provider = pick(reader.fieldnames, "Facility ID", "Provider ID", "Facility Id", "CMS Certification Number (CCN)")
+        k_rating   = pick(reader.fieldnames, "Hospital overall rating", "Overall Rating")
+
+        if not (k_provider and k_rating):
+            logger.warning("Star ratings CSV missing required columns: found=%s", reader.fieldnames)
+            return {}
+
+        ratings: dict[str, int] = {}
+        rows = 0
+        good = 0
+        for row in reader:
+            rows += 1
+            ccn = normalize_ccn(row.get(k_provider))
+            raw = (row.get(k_rating) or "").strip()
+            if not ccn or not raw or raw.lower().startswith("not"):
+                continue
+            try:
+                stars = int(float(raw))
+            except ValueError:
+                continue
+            if 1 <= stars <= 5:
+                ratings[ccn] = stars
+                good += 1
+
+        logger.info("Loaded %d Medicare star ratings from %s (parsed %d rows)", good, path, rows)
+        return ratings
+
+
 def main() -> int:
     # Load environment variables from a .env file if present
     load_dotenv()
@@ -75,6 +141,10 @@ def main() -> int:
 
     with psycopg.connect(conn_str) as conn:
         conn.execute("SET client_min_messages TO WARNING;")
+
+        # Load Medicare star ratings from local CSV
+        star_ratings = load_star_ratings_local(logger)
+
         with open(csv_path, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
 
@@ -138,8 +208,8 @@ def main() -> int:
             logger.info("Found %d unique ZIP codes", len(zip_pending))
 
             # Resolve all ZIP centroids in batches
+            total_zips_geocoded = 0
             with conn.cursor() as cur:
-                total_zips_geocoded = 0
                 if zip_pending:
                     logger.info("Checking existing ZIP centroids…")
                     cur.execute(
@@ -150,7 +220,7 @@ def main() -> int:
                     missing = sorted(zip_pending - present)
                     if missing:
                         logger.info("Geocoding %d missing ZIPs…", len(missing))
-                        batch_size = 100  # Zipcodebase can handle large batches
+                        batch_size = 100  # local batch geocoder, not external
                         new_centroids: list[tuple] = []
                         for i in range(0, len(missing), batch_size):
                             batch = missing[i:i + batch_size]
@@ -257,20 +327,27 @@ def main() -> int:
                         logger.debug("Upserted %d drg price rows", len(drg_values))
                         total_drg_rows += len(drg_values)
 
-                    # Insert ratings
+                    # Insert real Medicare star ratings (1–5) from local CSV, keyed by CCN
                     rating_rows: list[tuple] = []
                     for pid in providers_map.keys():
-                        if pid not in rating_assigned:
+                        ccn = normalize_ccn(pid)
+                        stars = star_ratings.get(ccn) if ccn else None
+                        if stars is not None and pid not in rating_assigned:
                             rating_assigned.add(pid)
-                            rating_rows.append((pid, random.randint(1, 10)))
+                            rating_rows.append((pid, stars))
+
                     if rating_rows:
                         execute_values(
                             cur,
-                            "INSERT INTO ratings (provider_id, rating) VALUES %s ON CONFLICT (provider_id) DO NOTHING",
+                            """
+                            INSERT INTO ratings (provider_id, rating)
+                            VALUES %s
+                            ON CONFLICT (provider_id) DO UPDATE SET rating = EXCLUDED.rating
+                            """,
                             rating_rows,
                             page_size=page_size,
                         )
-                        logger.debug("Inserted %d new ratings", len(rating_rows))
+                        logger.debug("Inserted/updated %d ratings", len(rating_rows))
                         total_ratings += len(rating_rows)
 
                     providers_map.clear()

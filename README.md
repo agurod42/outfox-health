@@ -122,7 +122,7 @@ What the ETL does:
 - Seeds `zip_centroids` for all ZIPs in `data.csv` (best-effort)
 - Upserts rows into `providers`
 
-> **Note:** ZIP code centroids used in this project were sourced from [GeoNames ZIP code data](https://download.geonames.org/export/zip/?utm_source=chatgpt.com).
+> **Note:** Ratings data were sourced from [CMS Care Compare Hospital General Information](https://data.cms.gov/provider-data/api/1/datastore/query/xubh-q36u/0/download?format=csv), and ZIP code centroids were sourced from [GeoNames ZIP code data](https://download.geonames.org/export/zip/?utm_source=chatgpt.com).
 
 ### 4) Run tests
 
