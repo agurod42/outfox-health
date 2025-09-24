@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_session
 from schemas import AskRequest, AskResponse, ProviderOut
 from openai import OpenAI
-import httpx
 import json
 
 
@@ -270,6 +269,7 @@ async def _query_providers(
     distance_join = ""
     distance_select = ""
     distance_condition = ""
+    bbox_condition = ""
     if zip_code and radius_km and radius_km > 0:
         # Require that a centroid exists for the source ZIP
         src_exists = (
@@ -279,8 +279,7 @@ async def _query_providers(
             logger.warning("missing_centroid src_zip=%s", zip_code)
             raise HTTPException(status_code=503, detail="zip centroid not available")
 
-        # Join only against existing destination centroids
-        # Join centroids and filter by Haversine distance
+        # Join only against existing destination centroids and prefilter by bounding box when possible
         distance_join = (
             "JOIN zip_centroids zc_src ON zc_src.zip = :src_zip "
             "JOIN zip_centroids zc_dest ON zc_dest.zip = p.zip "
@@ -290,28 +289,87 @@ async def _query_providers(
         params["src_zip"] = zip_code
         params["radius_km"] = radius_km
 
-    sql = f"""
-        SELECT
-            p.provider_id,
-            p.provider_name,
-            p.city,
-            p.state,
-            p.zip,
-            dp.ms_drg_code,
-            dp.ms_drg_description,
-            dp.total_discharges,
-            dp.avg_covered_charges,
-            dp.avg_total_payments,
-            dp.avg_medicare_payments,
-            r.rating{distance_select}
-        FROM drg_prices dp
-        JOIN providers p ON p.provider_id = dp.provider_id
-        {distance_join}
-        LEFT JOIN ratings r ON r.provider_id = p.provider_id
-        WHERE {where_sql}{distance_condition}
-        ORDER BY dp.avg_covered_charges ASC NULLS LAST
-        LIMIT 100
-    """
+        # Try to fetch src lat/lng to compute a coarse bounding box to cut candidates early
+        try:
+            src_row = (
+                await session.execute(
+                    text("SELECT lat, lng FROM zip_centroids WHERE zip = :z"), {"z": zip_code}
+                )
+            ).mappings().first()
+            if src_row and "lat" in src_row and "lng" in src_row:
+                src_lat = float(src_row["lat"])  # type: ignore[index]
+                src_lng = float(src_row["lng"])  # type: ignore[index]
+                # 1 degree latitude ~= 111.32 km
+                delta_lat = float(radius_km) / 111.32
+                # Guard against extreme latitudes in cos(); fallback to minimal longitude window if needed
+                try:
+                    denom = 111.32 * max(0.1, math.cos(math.radians(src_lat)))
+                except Exception:
+                    denom = 111.32
+                delta_lng = float(radius_km) / denom
+                params["min_lat"] = src_lat - delta_lat
+                params["max_lat"] = src_lat + delta_lat
+                params["min_lng"] = src_lng - delta_lng
+                params["max_lng"] = src_lng + delta_lng
+                bbox_condition = (
+                    " AND zc_dest.lat BETWEEN :min_lat AND :max_lat"
+                    " AND zc_dest.lng BETWEEN :min_lng AND :max_lng"
+                )
+        except Exception:
+            # Best-effort; skip bbox if any issue
+            pass
+
+    # When DRG is not provided, return the cheapest DRG row per provider using DISTINCT ON for speed
+    if not drg:
+        sql = f"""
+            WITH cheapest AS (
+                SELECT DISTINCT ON (p.provider_id)
+                    p.provider_id,
+                    p.provider_name,
+                    p.city,
+                    p.state,
+                    p.zip,
+                    dp.ms_drg_code,
+                    dp.ms_drg_description,
+                    dp.total_discharges,
+                    dp.avg_covered_charges,
+                    dp.avg_total_payments,
+                    dp.avg_medicare_payments,
+                    r.rating{distance_select}
+                FROM drg_prices dp
+                JOIN providers p ON p.provider_id = dp.provider_id
+                {distance_join}
+                LEFT JOIN ratings r ON r.provider_id = p.provider_id
+                WHERE {where_sql}{bbox_condition}{distance_condition}
+                ORDER BY p.provider_id, dp.avg_covered_charges ASC NULLS LAST
+            )
+            SELECT * FROM cheapest
+            ORDER BY avg_covered_charges ASC NULLS LAST
+            LIMIT 100
+        """
+    else:
+        sql = f"""
+            SELECT
+                p.provider_id,
+                p.provider_name,
+                p.city,
+                p.state,
+                p.zip,
+                dp.ms_drg_code,
+                dp.ms_drg_description,
+                dp.total_discharges,
+                dp.avg_covered_charges,
+                dp.avg_total_payments,
+                dp.avg_medicare_payments,
+                r.rating{distance_select}
+            FROM drg_prices dp
+            JOIN providers p ON p.provider_id = dp.provider_id
+            {distance_join}
+            LEFT JOIN ratings r ON r.provider_id = p.provider_id
+            WHERE {where_sql}{bbox_condition}{distance_condition}
+            ORDER BY dp.avg_covered_charges ASC NULLS LAST
+            LIMIT 100
+        """
 
     rows = (await session.execute(text(sql), params)).mappings().all()
     return [ProviderOut(**dict(row)) for row in rows]
