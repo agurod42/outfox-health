@@ -202,7 +202,9 @@ curl http://localhost:8000/healthz
 - Executes against DB
 - Returns grounded results or a helpful out-of-scope message
 
-### Minimal Frontend
+---
+
+## Minimal Frontend
 
 - Visit `http://localhost:8000/app` for a minimal UI to try `/ask`.
 - Static assets are served from `/static`.
@@ -212,7 +214,9 @@ curl http://localhost:8000/healthz
   <br />
 </p>
 
-### Example prompts to try
+---
+
+## Example prompts to try
 
 - Best-rated hospitals near 35233
 - Best-rated hospitals for traumatic stupor near 35233
