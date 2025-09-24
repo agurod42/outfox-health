@@ -44,7 +44,9 @@ Built with **Python 3.11**, **FastAPI**, **async SQLAlchemy**, **PostgreSQL**, a
 [FastAPI App]
    |-- GET /providers ----> [PostgreSQL]
    |                         ├─ providers
-   |                         └─ ratings
+   |                         ├─ drg_prices
+   |                         ├─ ratings
+   |                         └─ zip_centroids
    |
    |-- POST /ask ----------> [OpenAI API]
                              ├─ NL → SQL (guarded)
@@ -53,19 +55,20 @@ Built with **Python 3.11**, **FastAPI**, **async SQLAlchemy**, **PostgreSQL**, a
 [ETL Script]
    ├─ Read CSV
    ├─ Clean/normalize → cast numerics, trim strings, keep DRG codes as text
-   ├─ Upsert into providers
-   └─ Seed ratings (1–10 mock)
+   ├─ Upsert into providers/drg_prices
+   ├─ Load Medicare star ratings (1–5) from local CSV (data_rating.csv)
+   └─ Seed ZIP centroids from local file (data_zip.txt)
 ```
 
 **Design choices:**
 - Keep schema normalized for clear joins and fast filters on ZIP + DRG
 - Use text search on `ms_drg_description` for fuzzy matching
-- Use ZIP as coarse geospatial proxy (ZIP centroid + radius can be added later)
+- Use ZIP-centroid + Haversine radius filtering when `radius_km` is provided; fall back to exact ZIP when not
 - NL→SQL only for convenience; **all answers must be backed by DB results**
 
 **Trade-offs & future work:**
 - **Caching**: add Redis for hot queries
-- **Geospatial**: current approach filters by ZIP; add ZIP-centroid + Haversine or PostGIS for true radius
+- **Geospatial**: current approach uses Haversine on ZIP centroids; consider PostGIS for spatial indexes/accuracy at scale
 - **Observability**: add basic metrics/tracing; pydantic-settings for config
 - **Safety**: strict NL→SQL allow-list; parameterized queries only
 
@@ -91,8 +94,8 @@ pip install -r requirements.txt
 ### 1) Environment
 
 ```bash
-cp env.sample .env
-# Edit .env with database vars and OPENAI_API_KEY (optional)
+cp .env.sample .env
+# Edit .env with database vars and OPENAI_API_KEY
 ```
 
 ### 2) Docker
@@ -138,7 +141,7 @@ Tests stub the database dependency; a running DB is not required.
 
 - Swagger UI: `http://localhost:8000/docs`
 - OpenAPI JSON: `http://localhost:8000/openapi.json`
-- Root `/` redirects to the Swagger UI
+- Root `/` redirects to `/app`
 
 <p align="center">
   <img src="docs/api.gif" alt="OpenAPI/Swagger demo" width="900" />
@@ -148,9 +151,9 @@ Tests stub the database dependency; a running DB is not required.
 ### `GET /providers`
 
 **Query params**
-- `drg` (string, e.g., `023` or part of description)
 - `zip` (string ZIP5, e.g., `10001`)
-- `radius_km` (number, optional; ZIP-centroid radius if enabled later, for now filters by exact ZIP when radius not configured)
+- `radius_km` (number, optional). When provided and ZIP centroids are available, results include `distance_km`; otherwise falls back to exact ZIP.
+- `drg` (string, e.g., `023` or part of description)
 
 **Example**
 ```bash
@@ -172,7 +175,8 @@ curl "http://localhost:8000/providers?drg=023&zip=36301&radius_km=40"
     "avg_covered_charges": 158541.64,
     "avg_total_payments": 37331.00,
     "avg_medicare_payments": 35332.96,
-    "rating": 8
+    "distance_km": 12.3,
+    "rating": 4
   }
 ]
 ```
