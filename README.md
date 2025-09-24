@@ -7,8 +7,6 @@
 
 ![CI](https://github.com/agurod42/outfox-health/actions/workflows/ci.yml/badge.svg)
 
-<p align="center"><em>Ask natural questions about hospital costs and quality — get grounded, inspectable answers.</em></p>
-
 A focused, production‑style demo for exploring inpatient hospital pricing and quality signals by ZIP, radius, and MS‑DRG. Ask in plain English; the service generates safe SQL, executes it on PostgreSQL, and returns transparent results you can trust.
 
 Built with **Python 3.11**, **FastAPI**, **async SQLAlchemy**, **PostgreSQL**, and the **OpenAI API** (for NL→SQL).
