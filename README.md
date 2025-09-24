@@ -141,6 +141,11 @@ Tests stub the database dependency; a running DB is not required.
 - OpenAPI JSON: `http://localhost:8000/openapi.json`
 - Root `/` redirects to the Swagger UI
 
+<p align="center">
+  <img src="docs/api.gif" alt="OpenAPI/Swagger demo" width="900" />
+  <br />
+</p>
+
 ### `GET /providers`
 
 **Query params**
@@ -201,6 +206,11 @@ curl http://localhost:8000/healthz
 
 - Visit `http://localhost:8000/app` for a minimal UI to try `/ask`.
 - Static assets are served from `/static`.
+
+<p align="center">
+  <img src="docs/app.gif" alt="Minimal web app demo" width="900" />
+  <br />
+</p>
 
 ### Example prompts to try
 
