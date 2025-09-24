@@ -4,7 +4,8 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -124,6 +125,14 @@ def _build_hints(question: str | None, drg: str | None, zip_code: str | None, ra
         if m_proc and not m_drg:
             phrase = m_proc.group(1).strip()
             parts.append(f"drg_text_hint={phrase}")
+        # Intent hint: cost vs quality
+        lower_q = question.lower()
+        cost_terms = ("cheap", "cheapest", "price", "prices", "cost", "costs", "affordable")
+        quality_terms = ("best", "rating", "ratings", "quality", "top")
+        if any(t in lower_q for t in cost_terms):
+            parts.append("intent_hint=cost")
+        elif any(t in lower_q for t in quality_terms):
+            parts.append("intent_hint=quality")
     return ", ".join(parts)
 
 
@@ -140,6 +149,7 @@ def generate_nl2sql(question: str, hints: str) -> dict[str, str]:
         "You are Healthcare Cost Navigator’s assistant. You help users find hospitals and prices for MS-DRG procedures "
         "by DRG code/description (optional), ZIP (optional), and distance (optional). DRG is optional: if missing, "
         "return a general list of providers (e.g., within the area) ordered by lowest avg_covered_charges using drg_prices. "
+        "If the user asks about COST/cheapest/price, prefer ORDER BY dp.avg_covered_charges ASC. If the user asks about QUALITY/best-rated, prefer ORDER BY r.rating DESC NULLS LAST, then dp.avg_covered_charges ASC as a tie-breaker. "
         "Decide: if you can produce a safe SQL SELECT for the schema below, return it; otherwise return a short guidance "
         "message (no technical terms). Output strict JSON only with keys: {\"outcome\": \"sql|guidance\", \"sql\": string, \"guidance\": string, \"follow_up\": string}. "
         "When outcome=sql, sql must start with SELECT and be limited to 100 rows. If DRG is absent, you may aggregate to one row per provider (e.g., MIN(avg_covered_charges)). "
@@ -370,5 +380,22 @@ async def healthcheck(session: AsyncSession = Depends(get_session)):
 
 @app.get("/", include_in_schema=False)
 async def root_to_docs():
-    return RedirectResponse(url="/docs")
+    return RedirectResponse(url="/app")
+
+
+# Serve a minimal static frontend for demo usability
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+except Exception:
+    # In environments without a working directory, skip mounting
+    logger.warning("static_mount_failed")
+
+
+@app.get("/app", include_in_schema=False)
+async def frontend_app():
+    # Serve the minimal UI
+    index_path = os.path.join(os.getcwd(), "static", "index.html")
+    if not os.path.exists(index_path):
+        raise HTTPException(status_code=404, detail="frontend not found")
+    return FileResponse(index_path)
 

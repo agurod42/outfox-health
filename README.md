@@ -10,6 +10,7 @@ A minimal web service to explore hospital costs and ratings for MS-DRG procedure
   - Answer cost-related queries (e.g., cheapest provider near a ZIP)
   - Answer quality-related queries (e.g., best-rated hospitals for a DRG)
   - Handle out-of-scope questions appropriately
+  - Minimal web UI available at `/app`
 - **Database search**
   - Support searching for hospitals offering a given MS-DRG within a radius of a ZIP code and viewing estimated prices and quality signals
 - **ETL script (etl.py)**
@@ -93,6 +94,7 @@ cp env.sample .env
 docker-compose up --build
 ```
 
+App UI: `http://localhost:8000/app` (root `/` redirects here)
 Swagger UI: `http://localhost:8000/docs`
 
 ### 3) Seed the DB
@@ -185,3 +187,17 @@ curl http://localhost:8000/healthz
 - Uses LLM to draft a SQL query template (safe-listed fields only)
 - Executes against DB
 - Returns grounded results or a helpful out-of-scope message
+
+### Minimal Frontend
+
+- Visit `http://localhost:8000/app` for a minimal UI to try `/ask`.
+- Static assets are served from `/static`.
+
+### Example prompts to try
+
+- Cheapest hospital for DRG 470 within 25 miles of 10001
+- Best-rated hospitals for heart failure (DRG 291) near 60601
+- Lowest price for knee replacement near 94103
+- Which hospitals have the best ratings for hip replacement in 10001?
+- Show hospitals for DRG 023 in 36301 within 40 km
+

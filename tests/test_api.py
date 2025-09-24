@@ -110,11 +110,11 @@ def test_healthz_ok():
     assert res.json() == {"status": "ok"}
 
 
-def test_root_redirects_to_docs():
+def test_root_redirects_to_app():
     client = TestClient(app)
     res = client.get("/", follow_redirects=False)
     assert res.status_code in (302, 307)
-    assert res.headers["location"].endswith("/docs")
+    assert res.headers["location"].endswith("/app")
 
 
 def test_providers_requires_params():
@@ -348,5 +348,20 @@ def test_docs_and_openapi_available():
     res = client.get("/openapi.json")
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("application/json")
+
+
+def test_frontend_served_when_present(tmp_path, monkeypatch):
+    # Create a temporary static directory with index.html and mount via CWD
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    index_path = static_dir / "index.html"
+    index_path.write_text("<html><body>OK</body></html>", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    client = TestClient(app)
+    res = client.get("/app")
+    # If mounted correctly, should serve 200
+    assert res.status_code == 200
+    assert "OK" in res.text
 
 

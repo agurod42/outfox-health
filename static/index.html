@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Healthcare Cost Navigator</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+      .container { max-width: 800px; margin: 0 auto; }
+      textarea { width: 100%; min-height: 80px; }
+      button { padding: 8px 12px; }
+      .row { margin: 12px 0; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 8px; }
+      th { background: #f6f6f6; text-align: left; }
+      code { background: #f2f2f2; padding: 2px 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Healthcare Cost Navigator</h1>
+      <p>Ask about hospital costs or quality. Examples:</p>
+      <ul>
+        <li>Cheapest hospital for DRG 470 within 25 miles of 10001</li>
+        <li>Best-rated hospitals for heart surgery near 60601</li>
+      </ul>
+      <div class="row">
+        <label for="q">Your question</label>
+        <textarea id="q" placeholder="What's the cheapest hospital for knee replacement near me?"></textarea>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="include_sql" /> Include SQL</label>
+      </div>
+      <div class="row">
+        <button id="ask">Ask</button>
+      </div>
+      <div class="row" id="answer"></div>
+      <div class="row" id="follow_up" style="color:#444"></div>
+      <div class="row">
+        <table id="results"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="row" id="sql"></div>
+    </div>
+
+    <script>
+      async function ask() {
+        const q = document.getElementById('q').value.trim();
+        const includeSql = document.getElementById('include_sql').checked;
+        const answer = document.getElementById('answer');
+        const follow = document.getElementById('follow_up');
+        const sql = document.getElementById('sql');
+        const thead = document.querySelector('#results thead');
+        const tbody = document.querySelector('#results tbody');
+        answer.textContent = 'Loading…';
+        follow.textContent = '';
+        sql.textContent = '';
+        thead.innerHTML = '';
+        tbody.innerHTML = '';
+        try {
+          const res = await fetch('/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: q, include_sql: includeSql })
+          });
+          const data = await res.json();
+          answer.textContent = data.answer || '';
+          if (data.follow_up) {
+            follow.textContent = 'Follow-up: ' + data.follow_up;
+          }
+          if (data.sql) {
+            sql.innerHTML = '<div><strong>SQL</strong>: <code>' + (data.sql || '').replace(/</g,'&lt;') + '</code></div>';
+          }
+          const rows = Array.isArray(data.results) ? data.results : [];
+          if (rows.length) {
+            const cols = Object.keys(rows[0]);
+            thead.innerHTML = '<tr>' + cols.map(c => '<th>' + c + '</th>').join('') + '</tr>';
+            tbody.innerHTML = rows.map(r => '<tr>' + cols.map(c => '<td>' + (r[c] ?? '') + '</td>').join('') + '</tr>').join('');
+          }
+        } catch (e) {
+          answer.textContent = 'Request failed: ' + e;
+        }
+      }
+      document.getElementById('ask').addEventListener('click', ask);
+      document.getElementById('q').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          ask();
+        }
+      });
+    </script>
+  </body>
+  </html>
+
+
