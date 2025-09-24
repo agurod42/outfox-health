@@ -73,9 +73,34 @@
           }
           const rows = Array.isArray(data.results) ? data.results : [];
           if (rows.length) {
-            const cols = Object.keys(rows[0]);
+            const preferred = [
+              'provider_id','provider_name','city','state','zip',
+              'ms_drg_code','ms_drg_description','total_discharges',
+              'avg_covered_charges','avg_total_payments','avg_medicare_payments',
+              'cost_usd','rating','distance_km'
+            ];
+            const allKeys = Array.from(new Set(rows.flatMap(r => Object.keys(r || {}))));
+            const hasValue = k => rows.some(r => r && r[k] !== undefined && r[k] !== null && r[k] !== '');
+            // Compute derived cost_usd as a friendly alias preferring avg_total_payments → avg_medicare_payments → avg_covered_charges
+            const derived = rows.map(r => ({
+              ...r,
+              cost_usd: r.avg_total_payments ?? r.avg_medicare_payments ?? r.avg_covered_charges ?? null
+            }));
+            let cols = [
+              ...preferred.filter(k => allKeys.includes(k) && hasValue(k)),
+              ...allKeys.filter(k => !preferred.includes(k) && hasValue(k))
+            ];
+            if (!cols.length) cols = Object.keys(rows[0]);
             thead.innerHTML = '<tr>' + cols.map(c => '<th>' + c + '</th>').join('') + '</tr>';
-            tbody.innerHTML = rows.map(r => '<tr>' + cols.map(c => '<td>' + (r[c] ?? '') + '</td>').join('') + '</tr>').join('');
+            const formatVal = (v, key) => {
+              if (v === null || v === undefined) return '';
+              if (typeof v === 'number') {
+                if (key === 'distance_km') return v.toFixed(1);
+                return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+              }
+              return String(v);
+            };
+            tbody.innerHTML = derived.map(r => '<tr>' + cols.map(c => '<td>' + formatVal(r[c], c) + '</td>').join('') + '</tr>').join('');
           }
         } catch (e) {
           answer.textContent = 'Request failed: ' + e;

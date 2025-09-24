@@ -16,6 +16,7 @@ class ProviderOut(BaseModel):
     avg_total_payments: Optional[float] = Field(default=None, description="USD")
     avg_medicare_payments: Optional[float] = Field(default=None, description="USD")
     rating: Optional[int] = None
+    distance_km: Optional[float] = Field(default=None, description="Distance in km if radius filter applied")
 
 
 class AskRequest(BaseModel):
