@@ -26,7 +26,7 @@ class AskRequest(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
-    results: list[ProviderOut] = []
+    results: list[ProviderOut] = Field(default_factory=list)
     follow_up: Optional[str] = None
     sql: Optional[str] = None
 
