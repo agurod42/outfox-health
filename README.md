@@ -106,12 +106,11 @@ Swagger UI: `http://localhost:8000/docs`
 
 ### 3) Seed the DB
 
-Download and load the [dataset](https://catalog.data.gov/dataset/medicare-inpatient-hospitals-by-provider-and-service-9af02/resource/e51cf14c-615a-4efe-ba6b-3a3ef15dcfb0).
+Download and load the dataset:
 
-Option A — local Python (uses `.env` DB settings):
 ```bash
 curl -L "https://data.cms.gov/sites/default/files/2024-05/7d1f4bcd-7dd9-4fd1-aa7f-91cd69e452d3/MUP_INP_RY24_P03_V10_DY22_PrvSvc.CSV" -o data.csv
-CSV_PATH=data.csv python etl.py
+python etl.py
 ```
 
 What the ETL does:
