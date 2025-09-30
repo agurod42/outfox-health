@@ -228,3 +228,9 @@ curl http://localhost:8000/healthz
 - Who has the best ratings for traumatic stupor near 36301?
 - What's the weather today?
 
+---
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
+
